@@ -1,53 +1,61 @@
-# Classifier Word Metrics – % of Words per Post ID
-# Streamlit, pandas, nltk only • ≈125 LOC
+# classifier_word_metrics_app.py
+# Streamlit single-page app – % of classifier words per Instagram post
+# Dependencies: streamlit, pandas, nltk   •   <150 LOC
 
 import streamlit as st, pandas as pd, nltk, re
+from nltk.tokenize import wordpunct_tokenize   # regex-based → no Punkt download
 
+# ──────────────────────────────────────────────────────────────────────────────
 def main() -> None:
-    # ───── page & style ─────
+    # Page config & minimal luxury styling
     st.set_page_config(page_title="Classifier Word Metrics – % of Words per Post ID",
                        layout="centered")
     st.markdown(
-        "<style>h1{font-family:serif;}"
-        ".stButton>button{background:#DC143C;color:white;}</style>",
+        "<style>h1{font-family:serif;} "
+        ".stButton>button{background:#DC143C;color:white;font-weight:600;}"
+        "</style>",
         unsafe_allow_html=True)
     st.title("Classifier Word Metrics – % of Words per Post ID")
 
-    # ───── step 1 – upload ─────
-    st.markdown("**Step 1 – Upload CSV(s)** (raw Instagram posts **or** a file whose "
-                "columns already include `caption, shortcode, username, likes, comments`).")
+    # ── STEP 1 : Upload CSV ───────────────────────────────────────────────────
+    st.markdown("**Step 1 – Upload CSV(s)**  "
+                "(raw Instagram posts **or** a file that already contains "
+                "`caption, shortcode, username, likes, comments`).")
     files = st.file_uploader("Drag one or more .csv files here",
                              type="csv", accept_multiple_files=True)
 
-    def is_raw(df: pd.DataFrame) -> bool:
-        return {"caption", "shortcode", "username", "likes", "comments"}.issubset(df.columns)
-
-    df = None
+    mandatory = {"caption", "shortcode", "username", "likes", "comments"}
+    df = raw = other = None
     if files:
-        raw, other = None, None
         for f in files:
             d = pd.read_csv(f)
-            raw   = d if is_raw(d) and raw   is None else raw
-            other = d if not is_raw(d) and other is None else other
+            d.columns = d.columns.str.strip().str.lower()       # normalise headers
+            has_all = mandatory.issubset(d.columns)
+            raw   = d if has_all and raw   is None else raw     # prioritise raw-post file
+            other = d if not has_all and other is None else other
         df = raw if raw is not None else other
+        if df is not None and not mandatory.issubset(df.columns):
+            miss = ", ".join(mandatory.difference(df.columns))
+            st.error(f"⚠️ Uploaded file is missing column(s): {miss}")
+            df = None                                           # stop later steps
 
-    # ───── step 2 – dictionary ─────
+    # ── STEP 2 : Keyword dictionary ───────────────────────────────────────────
     st.markdown("**Step 2 – Define keyword dictionary**  "
                 "(one classifier per line → `name: word1, word2, …`).")
-    default_dict = "luxury: diamante, couture, gala\ncasual: jeans, sneakers, chill"
-    dict_text = st.text_area("Keyword Dictionary", value=default_dict, height=140)
+    dict_default = "luxury: diamante, couture, gala\ncasual: jeans, sneakers, chill"
+    dict_text = st.text_area("Keyword Dictionary", value=dict_default, height=140)
 
-    # ───── step 3 – generate ─────
+    # ── STEP 3 : Generate metrics ─────────────────────────────────────────────
     if st.button("Generate Metrics", type="primary"):
         if df is None:
-            st.error("⚠️ Upload at least one compatible CSV first.")
+            st.error("⚠️ Please upload at least one compatible CSV first.")
             return
 
-        # 3-A  parse dictionary
+        # 3-A  parse dictionary ------------------------------------------------
         classifiers: dict[str, set[str]] = {}
-        for ln in dict_text.strip().splitlines():
-            if ":" in ln:
-                name, kws = ln.split(":", 1)
+        for line in dict_text.strip().splitlines():
+            if ":" in line:
+                name, kws = line.split(":", 1)
                 kws = [k.strip().lower() for k in kws.split(",") if k.strip()]
                 if kws:
                     classifiers[name.strip()] = set(kws)
@@ -55,19 +63,18 @@ def main() -> None:
             st.error("⚠️ No valid classifiers detected.")
             return
 
-        # 3-B  tokenise
-        nltk.download("punkt", quiet=True)
-        def tokens(txt: str) -> list[str]:
-            words = nltk.word_tokenize(str(txt).lower())
-            words = [re.sub(r"\W+", "", w) for w in words]
+        # 3-B  tokenise captions ----------------------------------------------
+        def tokens(text: str) -> list[str]:
+            words = wordpunct_tokenize(str(text).lower())
+            words = [re.sub(r"\W+", "", w) for w in words]       # strip punctuation
             return [w for w in words if w]
 
-        # 3-C  count & aggregate
-        rows = []
+        # 3-C  count & aggregate ----------------------------------------------
+        rows: list[dict] = []
         for _, r in df.iterrows():
             tok = tokens(r["caption"])
             total = len(tok)
-            counts = {n: sum(t in kws for t in tok) for n, kws in classifiers.items()}
+            counts = {n: sum(w in kws for w in tok) for n, kws in classifiers.items()}
             rows.append({"shortcode": r["shortcode"], "total_words": total, **counts})
 
         res = (pd.DataFrame(rows)
@@ -75,17 +82,19 @@ def main() -> None:
         for n in classifiers:
             res[f"%_{n}"] = res[n] / res["total_words"] * 100
 
-        # 3-D  display & download
-        st.subheader("Preview")
-        st.dataframe(res.head())
-        csv = res.to_csv(index=False).encode()
-        st.download_button("Download full CSV", csv,
-                           file_name="classifier_metrics.csv", mime="text/csv")
+        # 3-D  display & download ---------------------------------------------
+        st.subheader("Preview");  st.dataframe(res.head())
+        st.download_button("Download full CSV",
+                           res.to_csv(index=False).encode(),
+                           "classifier_metrics.csv", mime="text/csv")
 
-    # ───── sidebar requirements ─────
-    with st.sidebar.expander("requirements.txt"):
+    # ── Minimal requirements.txt (main-page expander) ────────────────────────
+    with st.expander("requirements.txt"):
         st.code("streamlit\npandas\nnltk", language="text")
 
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
+
+
 
