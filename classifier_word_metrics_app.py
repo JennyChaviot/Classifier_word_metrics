@@ -1,57 +1,61 @@
 # classifier_word_metrics_app.py
-# Streamlit single-page app – % of classifier words per Instagram post
-# Dependencies: streamlit, pandas, nltk   •   <150 LOC
+# Streamlit app – % of classifier words per Instagram post (≈75 LOC)
 
 import streamlit as st, pandas as pd, nltk, re
-from nltk.tokenize import wordpunct_tokenize   # regex-based → no Punkt download
+from nltk.tokenize import wordpunct_tokenize        # regex-based → no Punkt download
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 def main() -> None:
-    # Page config & minimal luxury styling
+    # page setup & a touch of “classic luxury”
     st.set_page_config(page_title="Classifier Word Metrics – % of Words per Post ID",
                        layout="centered")
     st.markdown(
-        "<style>h1{font-family:serif;} "
-        ".stButton>button{background:#DC143C;color:white;font-weight:600;}"
-        "</style>",
+        "<style>h1{font-family:serif;}"
+        ".stButton>button{background:#DC143C;color:white;font-weight:600;}</style>",
         unsafe_allow_html=True)
     st.title("Classifier Word Metrics – % of Words per Post ID")
 
-    # ── STEP 1 : Upload CSV ───────────────────────────────────────────────────
-    st.markdown("**Step 1 – Upload CSV(s)**  "
-                "(raw Instagram posts **or** a file that already contains "
-                "`caption, shortcode, username, likes, comments`).")
-    files = st.file_uploader("Drag one or more .csv files here",
-                             type="csv", accept_multiple_files=True)
+    # ── STEP 1 – upload CSV ──────────────────────────────────────────────────
+    st.markdown("**Step 1 – Upload CSV(s)** "
+                "(any file that has *both* an **ID** column and a **caption/text** column).")
+    files = st.file_uploader("Drag one or more .csv files here", type="csv", accept_multiple_files=True)
 
-    mandatory = {"caption", "shortcode", "username", "likes", "comments"}
-    df = raw = other = None
+    df = None
     if files:
+        # accepted header aliases (case-insensitive, whitespace ignored)
+        cap_aliases = {"caption", "statement", "cleaned", "text", "content"}
+        id_aliases  = {"shortcode", "id", "postid", "post id"}
+
         for f in files:
             d = pd.read_csv(f)
-            d.columns = d.columns.str.strip().str.lower()       # normalise headers
-            has_all = mandatory.issubset(d.columns)
-            raw   = d if has_all and raw   is None else raw     # prioritise raw-post file
-            other = d if not has_all and other is None else other
-        df = raw if raw is not None else other
-        if df is not None and not mandatory.issubset(df.columns):
-            miss = ", ".join(mandatory.difference(df.columns))
-            st.error(f"⚠️ Uploaded file is missing column(s): {miss}")
-            df = None                                           # stop later steps
+            d.columns = d.columns.str.strip().str.lower()             # normalise headers
+            cap_col = next((c for c in d.columns if c in cap_aliases), None)
+            id_col  = next((c for c in d.columns if c in id_aliases),  None)
+            if cap_col and id_col:                                    # found a usable file
+                df = d.rename(columns={cap_col: "caption",
+                                       id_col:  "shortcode"})[["shortcode", "caption"]]
+                break
 
-    # ── STEP 2 : Keyword dictionary ───────────────────────────────────────────
-    st.markdown("**Step 2 – Define keyword dictionary**  "
-                "(one classifier per line → `name: word1, word2, …`).")
+        if df is None:
+            st.error("⚠️ Couldn’t find both an ID column and a caption/text column "
+                     "in the uploaded file(s).")
+
+    else:
+        st.info("↖️ Upload a CSV to continue.")
+
+    # ── STEP 2 – keyword dictionary ─────────────────────────────────────────
     dict_default = "luxury: diamante, couture, gala\ncasual: jeans, sneakers, chill"
-    dict_text = st.text_area("Keyword Dictionary", value=dict_default, height=140)
+    dict_text = st.text_area("**Step 2 – Keyword Dictionary** "
+                             "(one classifier per line → `name: word1, word2, …`).",
+                             value=dict_default, height=140)
 
-    # ── STEP 3 : Generate metrics ─────────────────────────────────────────────
+    # ── STEP 3 – generate metrics ───────────────────────────────────────────
     if st.button("Generate Metrics", type="primary"):
         if df is None:
-            st.error("⚠️ Please upload at least one compatible CSV first.")
+            st.error("⚠️ Please upload a compatible CSV first.")
             return
 
-        # 3-A  parse dictionary ------------------------------------------------
+        # parse dictionary
         classifiers: dict[str, set[str]] = {}
         for line in dict_text.strip().splitlines():
             if ":" in line:
@@ -60,17 +64,15 @@ def main() -> None:
                 if kws:
                     classifiers[name.strip()] = set(kws)
         if not classifiers:
-            st.error("⚠️ No valid classifiers detected.")
-            return
+            st.error("⚠️ No valid classifiers detected."); return
 
-        # 3-B  tokenise captions ----------------------------------------------
-        def tokens(text: str) -> list[str]:
-            words = wordpunct_tokenize(str(text).lower())
-            words = [re.sub(r"\W+", "", w) for w in words]       # strip punctuation
-            return [w for w in words if w]
+        # tokeniser (regex, punctuation stripped)
+        def tokens(txt: str) -> list[str]:
+            words = wordpunct_tokenize(str(txt).lower())
+            return [re.sub(r"\W+", "", w) for w in words if re.sub(r"\W+", "", w)]
 
-        # 3-C  count & aggregate ----------------------------------------------
-        rows: list[dict] = []
+        # count + aggregate
+        rows = []
         for _, r in df.iterrows():
             tok = tokens(r["caption"])
             total = len(tok)
@@ -82,19 +84,16 @@ def main() -> None:
         for n in classifiers:
             res[f"%_{n}"] = res[n] / res["total_words"] * 100
 
-        # 3-D  display & download ---------------------------------------------
-        st.subheader("Preview");  st.dataframe(res.head())
+        # show + download
+        st.subheader("Preview"); st.dataframe(res.head())
         st.download_button("Download full CSV",
                            res.to_csv(index=False).encode(),
                            "classifier_metrics.csv", mime="text/csv")
 
-    # ── Minimal requirements.txt (main-page expander) ────────────────────────
+    # ── minimalist requirements.txt for reference ───────────────────────────
     with st.expander("requirements.txt"):
         st.code("streamlit\npandas\nnltk", language="text")
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
-
-
-
