@@ -1,83 +1,100 @@
-# Classifier Word Metrics – Classic Timeless Luxury Style
-# Dependencies: streamlit, pandas, nltk  •  ≈125 LOC
 
-import streamlit as st, pandas as pd, re
-from nltk.tokenize import wordpunct_tokenize   # works without Punkt model
+# pages/4_classifier_metrics.py
+# ---------------------------------------------------------
+# Classifier Metrics – post‑level keyword‑share metrics
+# ---------------------------------------------------------
+import re
+import pandas as pd
+import streamlit as st
 
+# ---------- tokenizer (works with or without NLTK) ----------
+try:
+    from nltk.tokenize import wordpunct_tokenize  # no extra downloads
+except ModuleNotFoundError:
+    def wordpunct_tokenize(text: str):
+        """Fallback that mimics NLTK's wordpunct_tokenize."""
+        return re.findall(r"\w+|[^\w\s]", text, flags=re.UNICODE)
+# ------------------------------------------------------------
 
-def main() -> None:
-    # ── Page & style ────────────────────────────────────────────────────────
-    st.set_page_config(page_title="Classic Timeless Luxury Metrics",
-                       layout="centered")
-    st.markdown(
-        "<style>h1{font-family:serif;} "
-        ".stButton>button{background:#DC143C;color:white;font-weight:600;}</style>",
-        unsafe_allow_html=True)
-    st.title("Classifier Word Metrics – Classic Timeless Luxury Style")
+DEFAULT_KEYWORDS = (
+    "timeless, heritage, vintage, couture, iconic, "
+    "elegant, refined, bespoke, classic"
+)
 
-    # ── STEP 1 • Upload CSV ─────────────────────────────────────────────────
-    files = st.file_uploader("Upload a CSV (1 row = 1 sentence)",
-                             type="csv", accept_multiple_files=False)
+st.set_page_config(page_title="Classifier Metrics", page_icon="🧮")
+st.title("Classifier Metrics")
 
-    if not files:
-        st.info("↖️ Upload a CSV to begin.")
-        return
+# ─────────────────────────────────────────────────────────────
+# STEP 1 • upload CSV  (1 row = 1 sentence)
+# ─────────────────────────────────────────────────────────────
+csv = st.file_uploader("Upload a CSV (1 row = 1 sentence)", type="csv")
+if not csv:
+    st.stop()
 
-    df = pd.read_csv(files)
-    st.subheader("Preview"); st.dataframe(df.head())
+# Load data & preview
 
-    # ── STEP 2 • Select columns ─────────────────────────────────────────────
-    id_col   = st.selectbox("ID column (post identifier)",   df.columns, index=0)
-    text_col = st.selectbox("Sentence / text column",        df.columns, index=1)
+df = pd.read_csv(csv)
+st.subheader("Preview")
+st.dataframe(df.head(), use_container_width=True)
 
-    # ── STEP 3 • Keyword dictionary ────────────────────────────────────────
-    default_kw = ("timeless, heritage, vintage, couture, "
-                  "iconic, elegant, refined, bespoke, classic")
-    kw_input = st.text_input("Classic-timeless-luxury keywords (comma-separated)",
-                             value=default_kw)
+# ─────────────────────────────────────────────────────────────
+# STEP 2 • choose columns
+# ─────────────────────────────────────────────────────────────
+id_col   = st.selectbox("ID column (post identifier)", df.columns, index=0)
+text_col = st.selectbox("Sentence / text column", df.columns, index=min(3, len(df.columns)-1))
+
+kw_input = st.text_input(
+    "Classifier keywords (comma‑separated)", value=DEFAULT_KEYWORDS,
+)
+
+if not kw_input.strip():
+    st.warning("Enter at least one keyword.")
+    st.stop()
+
+# ─────────────────────────────────────────────────────────────
+# STEP 3 • generate metrics
+# ─────────────────────────────────────────────────────────────
+if st.button("Generate Metrics"):
+
     keywords = {k.strip().lower() for k in kw_input.split(",") if k.strip()}
-    if not keywords:
-        st.warning("⚠ Please provide at least one keyword.")
-        return
+    st.write(f"Using *{len(keywords)}* keywords.")
 
-    # ── STEP 4 • Generate metrics ───────────────────────────────────────────
-    if not st.button("Generate Metrics", type="primary"):
-        return
+    # sentence‑level flags & counts
+    def analyse_sentence(text: str):
+        toks = [t.lower() for t in wordpunct_tokenize(str(text))]
+        hits = [t for t in toks if t in keywords]
+        return len(toks), len(hits), 1 if hits else 0
 
-    def tok(text: str) -> list[str]:
-        words = wordpunct_tokenize(str(text).lower())
-        return [re.sub(r"\W+", "", w) for w in words if re.sub(r"\W+", "", w)]
+    sent_metrics = df[text_col].apply(analyse_sentence)
+    df[["word_cnt", "hit_word_cnt", "hit_stmt"]] = pd.DataFrame(
+        sent_metrics.tolist(), index=df.index
+    )
 
-    # sentence-level flags & counts
-    df["_is_classic"]    = df[text_col].apply(lambda t: any(w in keywords for w in tok(t)))
-    df["_classic_words"] = df[text_col].apply(lambda t: sum(w in keywords for w in tok(t)))
-    df["_total_words"]   = df[text_col].apply(lambda t: len(tok(t)))
+    # post‑level aggregation
+    agg = (
+        df.groupby(id_col)
+          .agg(total_stmts   = ("hit_stmt", "count"),
+               hit_stmts     = ("hit_stmt", "sum"),
+               total_words   = ("word_cnt", "sum"),
+               hit_words     = ("hit_word_cnt", "sum"))
+          .reset_index()
+    )
+    agg["pct_hit_stmts"] = (agg["hit_stmts"] / agg["total_stmts"] * 100).round(2)
+    agg["pct_hit_words"] = (agg["hit_words"] / agg["total_words"] * 100).round(2)
 
-    # post-level aggregation
-    agg = (df.groupby(id_col)
-             .agg(total_stmts   = ("_is_classic",    "size"),
-                  classic_stmts = ("_is_classic",    "sum"),
-                  total_words   = ("_total_words",   "sum"),
-                  classic_words = ("_classic_words", "sum"))
-             .reset_index())
+    st.subheader("Post‑level metrics")
+    st.dataframe(agg, use_container_width=True)
 
-    agg["pct_classic_stmts"] = agg["classic_stmts"] / agg["total_stmts"] * 100
-    agg["pct_classic_words"] = agg["classic_words"] / agg["total_words"] * 100
-
-    # ── STEP 5 • Show & download ────────────────────────────────────────────
-    st.subheader("Post-level metrics")
-    st.dataframe(agg.head())
-
-    st.download_button("Download full CSV",
-                       agg.to_csv(index=False).encode(),
-                       file_name="classic_timeless_metrics.csv",
-                       mime="text/csv")
-
-    # tidy requirements reference
-    with st.expander("requirements.txt"):
-        st.code("streamlit\npandas\nnltk", language="text")
-
-
-# so other scripts can import main()
-if __name__ == "__main__":
-    main()
+    # ─── download buttons ───
+    st.download_button(
+        "Download post‑level metrics CSV",
+        agg.to_csv(index=False).encode(),
+        "post_level_metrics.csv",
+        "text/csv",
+    )
+    st.download_button(
+        "Download sentence‑level detail CSV",
+        df.to_csv(index=False).encode(),
+        "sentence_level_metrics.csv",
+        "text/csv",
+    )
